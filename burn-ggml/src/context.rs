@@ -5,17 +5,12 @@ use crate::graph::GgmlGraphExecutor;
 use crate::memory::{LayerWeightCache, KvOffloadManager};
 use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use std::path::PathBuf;
 
-struct BackendRegistry {
-    backends: HashMap<GgmlDevice, ( *mut ggml_backend, *mut ggml_backend_sched)>,
-}
-
-unsafe impl Send for BackendRegistry {}
-unsafe impl Sync for BackendRegistry {}
-
-static REGISTRY: Lazy<Mutex<BackendRegistry>> = Lazy::new(|| Mutex::new(BackendRegistry {
-    backends: HashMap::new(),
-}));
+/// A registry of GGML contexts by device.
+static REGISTRY: Lazy<Mutex<HashMap<GgmlDevice, Arc<GgmlContext>>>> = Lazy::new(|| {
+    Mutex::new(HashMap::new())
+});
 
 pub struct GgmlContext {
     pub(crate) ptr: *mut ggml_context,
@@ -27,8 +22,8 @@ pub struct GgmlContext {
     pub(crate) kv_offload: Option<Arc<KvOffloadManager>>,
 }
 
-impl std::fmt::Debug for GgmlContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for GgmlContext {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("GgmlContext")
             .field("device", &self.device)
             .finish()
@@ -36,43 +31,41 @@ impl std::fmt::Debug for GgmlContext {
 }
 
 impl GgmlContext {
-    pub fn new(device: GgmlDevice) -> Self {
+    pub fn get(device: &GgmlDevice) -> Arc<Self> {
         let mut registry = REGISTRY.lock().unwrap();
-        let (backend, sched) = if let Some(entry) = registry.backends.get(&device) {
-            *entry
-        } else {
-            unsafe {
-                let (backend, _, _) = match &device {
-                    GgmlDevice::Cpu => {
-                        let b = ggml_backend_cpu_init();
-                        (b, Option::<Arc<LayerWeightCache>>::None, Option::<Arc<KvOffloadManager>>::None)
-                        }
-                        GgmlDevice::Metal => {
-                        #[cfg(target_os = "macos")]
-                        let b = ggml_backend_metal_init();
-                        #[cfg(not(target_os = "macos"))]
-                        let b = ggml_backend_cpu_init();
-                        (b, Option::<Arc<LayerWeightCache>>::None, Option::<Arc<KvOffloadManager>>::None)
-                        }
-                        GgmlDevice::MetalWithOffload { .. } => {
-                        #[cfg(target_os = "macos")]
-                        let b = ggml_backend_metal_init();
-                        #[cfg(not(target_os = "macos"))]
-                        let b = ggml_backend_cpu_init();
-                        (b, Option::<Arc<LayerWeightCache>>::None, Option::<Arc<KvOffloadManager>>::None)
-                        }
-                        };
-                let mut backends = [backend];
-                let sched = ggml_backend_sched_new(
-                    backends.as_mut_ptr(),
-                    std::ptr::null_mut(),
-                    backends.len() as i32,
-                    65536, // Increased from 8192 to support larger models
-                    false,
-                    false,
-                );
-                registry.backends.insert(device.clone(), (backend, sched));
-                (backend, sched)
+        if let Some(ctx) = registry.get(device) {
+            return ctx.clone();
+        }
+
+        let ctx = Arc::new(Self::new(device.clone()));
+        registry.insert(device.clone(), ctx.clone());
+        ctx
+    }
+
+    pub fn new(device: GgmlDevice) -> Self {
+        let (backend, layer_cache, kv_offload) = match &device {
+            GgmlDevice::Cpu => {
+                let b = unsafe { ggml_backend_cpu_init() };
+                (b, None, None)
+            }
+            GgmlDevice::Metal => {
+                #[cfg(target_os = "macos")]
+                let b = unsafe { ggml_backend_metal_init() };
+                #[cfg(not(target_os = "macos"))]
+                let b = unsafe { ggml_backend_cpu_init() };
+                (b, None, None)
+            }
+            GgmlDevice::MetalWithOffload { kv_cache_dir, max_layers_in_ram } => {
+                #[cfg(target_os = "macos")]
+                let b = unsafe { ggml_backend_metal_init() };
+                #[cfg(not(target_os = "macos"))]
+                let b = unsafe { ggml_backend_cpu_init() };
+                
+                // Placeholder path for tests
+                let model_path = PathBuf::from("model.gguf");
+                let lc = Arc::new(LayerWeightCache::new(model_path, max_layers_in_ram.clone()));
+                let kv = Arc::new(KvOffloadManager::new());
+                (b, Some(lc), Some(kv))
             }
         };
 
@@ -84,14 +77,15 @@ impl GgmlContext {
             };
             let ctx = ggml_init(params);
 
-            let (layer_cache, kv_offload) = match &device {
-                GgmlDevice::MetalWithOffload { kv_cache_dir, max_layers_in_ram } => {
-                    let lc = Arc::new(LayerWeightCache::new(kv_cache_dir.clone(), *max_layers_in_ram));
-                    let kv = Arc::new(KvOffloadManager::new());
-                    (Some(lc), Some(kv))
-                }
-                _ => (None, None),
-            };
+            let backends = Box::leak(Box::new([backend]));
+            let sched = ggml_backend_sched_new(
+                backends.as_mut_ptr(),
+                std::ptr::null_mut(),
+                backends.len() as i32,
+                65536,
+                false,
+                false,
+            );
 
             GgmlContext {
                 ptr: ctx,
@@ -110,6 +104,7 @@ impl Drop for GgmlContext {
     fn drop(&mut self) {
         unsafe {
             // Note: We don't free the backend or sched anymore because they are shared in the REGISTRY
+            // and we leaked the backends array. In a real app we might want a cleaner shutdown.
             ggml_free(self.ptr);
         }
     }

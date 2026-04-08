@@ -11,6 +11,8 @@ pub use backend::*;
 pub use device::*;
 pub use tensor::*;
 pub use context::*;
+pub use ops::prefetch::*;
+pub use ops::offload::*;
 
 #[cfg(test)]
 mod tests {

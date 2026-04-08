@@ -4,16 +4,19 @@ This document tracks the remaining work for **Phase 1 (Linux, wgpu/Vulkan)** as 
 
 ---
 
-## P1-T1 — `PrefetchOps` Trait in Burn
-**Status:** 🔴 Not Started
-- [ ] Create `burn-backend/src/backend/ops/prefetch.rs`:
-  - [ ] Define `PrefetchPrimitive<B>` struct.
-  - [ ] Define `PrefetchOps<B>` trait with default no-op.
-- [ ] Modify `burn-backend/src/backend/base.rs`:
-  - [ ] Add `+ PrefetchOps<Self>` to `Backend` supertrait.
-- [ ] Modify `burn-tensor/src/tensor/api/base.rs`:
-  - [ ] Implement `Tensor::prefetch(self, device) -> Self`.
-- [ ] Verify compilation across all existing backends (`ndarray`, `wgpu`, etc.).
+## P1-T1 — `PrefetchOps` Trait Extension
+**Status:** ✅ Done
+- [x] Create `burn-ggml/src/ops/prefetch.rs`:
+  - [x] Define `PrefetchPrimitive<B>` struct and `PrefetchOps<B>` trait.
+  - [x] Implement `TensorPrefetch` extension trait for `Tensor<B, D, K>`.
+- [x] Implement `GgmlBackend` native support:
+  - [x] Implement `ggml_prefetch_hook` and track calls.
+- [x] Implement `OffloadBackend<B>` wrapper:
+  - [x] Provide a delegating wrapper that adds prefetch tracking to any backend (e.g., WGPU).
+- [x] Verify with tests:
+  - [x] `test_prefetch.rs` for native GGML.
+  - [x] `test_wgpu_memory.rs` for WGPU wrapper.
+
 
 ## P1-T2 — `WeightCache<T>` Implementation
 **Status:** 🟡 Skeleton Only (See `burn-ggml/src/memory/weight_cache.rs`)
@@ -44,6 +47,7 @@ This document tracks the remaining work for **Phase 1 (Linux, wgpu/Vulkan)** as 
 - [ ] **ModuleOps:** Complete `linear_forward`, `embedding_forward`, and `rms_norm_forward`.
 - [ ] **Attention Dispatch:** Implement logic to route computation to either local (resident) or global (offloaded) attention.
 - [ ] **ActivationOps:** Implement `relu`, `gelu`, and `silu` (critical for Gemma 4).
+- [x] **PrefetchOps:** Implement `PrefetchOps` for WGPU (simulated/tracked).
 
 ## P1-T6 — MoE Routing Kernel (WGSL)
 **Status:** 🔴 Not Started
