@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "ggml-sys",
+    "burn-ggml",
+]
+resolver = "2"
+
+[workspace.dependencies]
+burn       = { version = "0.21.0-pre.2", features = ["std"] }
+ggml-sys   = { path = "ggml-sys" }
+tokio      = { version = "1", features = ["full"] }
+memmap2    = "0.9"
+tracing    = "0.1"
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+byteorder  = "1.5"
+lru        = "0.12"
+async-trait = "0.1"
+futures    = "0.3"

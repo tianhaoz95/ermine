@@ -1,0 +1,22 @@
+[package]
+name    = "burn-ggml"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+burn      = { workspace = true }
+ggml-sys  = { workspace = true }
+tokio     = { workspace = true }
+memmap2   = { workspace = true }
+tracing   = { workspace = true }
+serde     = { workspace = true }
+serde_json = { workspace = true }
+byteorder = { workspace = true }
+lru       = { workspace = true }
+async-trait = { workspace = true }
+futures   = { workspace = true }
+once_cell = "1.19"
+enumset = "1.1.10"
+
+[dev-dependencies]
+burn = { workspace = true }
