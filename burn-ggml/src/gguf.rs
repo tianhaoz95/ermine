@@ -2,36 +2,24 @@ use std::collections::HashMap;
 use std::path::Path;
 use memmap2::Mmap;
 use byteorder::{ReadBytesExt, LittleEndian};
-use std::io::{Cursor, Seek, SeekFrom, Read};
+use std::io::{Cursor, Read};
 use std::sync::Arc;
 use crate::context::GgmlContext;
 use crate::tensor::GgmlTensor;
 use ggml_sys::*;
+use std::ffi::c_void;
 
-#[derive(Debug)]
-pub enum GgufError {
-    Io(std::io::Error),
-    InvalidMagic,
-    InvalidVersion(u32),
-    TensorNotFound(String),
-}
-
+/// Metadata about a single tensor in a GGUF file.
+#[derive(Debug, Clone)]
 pub struct GgufTensorInfo {
     pub name: String,
     pub shape: Vec<usize>,
-    pub ggml_type: ggml_type,
+    pub ggml_type: u32,
+    /// Byte offset of tensor data from the start of the tensor data section.
     pub data_offset: u64,
-    pub data_size: usize,
 }
 
-pub struct GgufIndex {
-    pub metadata: HashMap<String, GgufMetadataValue>,
-    pub tensors: HashMap<String, GgufTensorInfo>,
-    pub data_section_offset: u64,
-    pub mmap: Mmap,
-}
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GgufMetadataValue {
     Uint8(u8),
     Int8(i8),
@@ -43,137 +31,113 @@ pub enum GgufMetadataValue {
     Bool(bool),
     String(String),
     Array(Vec<GgufMetadataValue>),
+    Uint64(u64),
+    Int64(i64),
+    Float64(f64),
 }
 
-impl GgufMetadataValue {
-    pub fn as_u32(&self) -> Option<u32> {
-        match self {
-            GgufMetadataValue::Uint32(v) => Some(*v),
-            _ => None,
-        }
-    }
+/// Parsed GGUF index: metadata + tensor directory, no tensor data loaded yet.
+pub struct GgufIndex {
+    pub metadata: HashMap<String, GgufMetadataValue>,
+    pub tensors: HashMap<String, GgufTensorInfo>,
+    /// Byte offset in the file where tensor data begins.
+    pub data_section_offset: u64,
+    mmap: Mmap,
 }
 
 impl GgufIndex {
-    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, GgufError> {
-        let file = std::fs::File::open(path).map_err(GgufError::Io)?;
-        let mmap = unsafe { Mmap::map(&file).map_err(GgufError::Io)? };
-        let mut cursor = Cursor::new(&mmap[..]);
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error> {
+        let file = std::fs::File::open(path)?;
+        let mmap = unsafe { Mmap::map(&file)? };
 
-        let magic = cursor.read_u32::<LittleEndian>().map_err(GgufError::Io)?;
+        let mut cursor = Cursor::new(mmap.as_ref());
+        let magic = cursor.read_u32::<LittleEndian>()?;
         if magic != 0x46554747 {
-            return Err(GgufError::InvalidMagic);
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Invalid GGUF magic"));
+        }
+        let version = cursor.read_u32::<LittleEndian>()?;
+        if version < 2 {
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Unsupported GGUF version"));
         }
 
-        let version = cursor.read_u32::<LittleEndian>().map_err(GgufError::Io)?;
-        if version != 2 && version != 3 {
-            return Err(GgufError::InvalidVersion(version));
-        }
-
-        let n_tensors = cursor.read_u64::<LittleEndian>().map_err(GgufError::Io)?;
-        let n_kv = cursor.read_u64::<LittleEndian>().map_err(GgufError::Io)?;
+        let n_tensors = cursor.read_u64::<LittleEndian>()?;
+        let n_kv = cursor.read_u64::<LittleEndian>()?;
 
         let mut metadata = HashMap::new();
         for _ in 0..n_kv {
-            let key = read_string(&mut cursor).map_err(GgufError::Io)?;
-            let val_type = cursor.read_u32::<LittleEndian>().map_err(GgufError::Io)?;
-            let val = read_value(&mut cursor, val_type).map_err(GgufError::Io)?;
+            let key = read_string(&mut cursor)?;
+            let val_type = cursor.read_u32::<LittleEndian>()?;
+            let val = read_value(&mut cursor, val_type)?;
             metadata.insert(key, val);
         }
 
         let mut tensors = HashMap::new();
         for _ in 0..n_tensors {
-            let name = read_string(&mut cursor).map_err(GgufError::Io)?;
-            let n_dims = cursor.read_u32::<LittleEndian>().map_err(GgufError::Io)?;
-            let mut shape = Vec::new();
+            let name = read_string(&mut cursor)?;
+            let n_dims = cursor.read_u32::<LittleEndian>()?;
+            let mut shape = Vec::with_capacity(n_dims as usize);
             for _ in 0..n_dims {
-                shape.push(cursor.read_u64::<LittleEndian>().map_err(GgufError::Io)? as usize);
+                shape.push(cursor.read_u64::<LittleEndian>()? as usize);
             }
-            let ggml_type = cursor.read_u32::<LittleEndian>().map_err(GgufError::Io)?;
-            let offset = cursor.read_u64::<LittleEndian>().map_err(GgufError::Io)?;
-
-            let n_elements: usize = shape.iter().product();
-            let data_size = match ggml_type {
-                t if t == ggml_type_GGML_TYPE_F32 as u32 => n_elements * 4,
-                t if t == ggml_type_GGML_TYPE_F16 as u32 => n_elements * 2,
-                t if t == ggml_type_GGML_TYPE_Q4_K as u32 => {
-                    let k = 256;
-                    ((n_elements + k - 1) / k) * (k / 2 + 2 * 2 + 12) // Q4_K block size
-                }
-                t if t == ggml_type_GGML_TYPE_Q4_0 as u32 => (n_elements / 32) * (16 + 2),
-                t if t == ggml_type_GGML_TYPE_Q4_1 as u32 => (n_elements / 32) * (16 + 2 + 2),
-                _ => {
-                    println!("WARNING: Unknown GGML type {} for tensor {}, data_size might be wrong", ggml_type, name);
-                    0
-                }
-            };
-
+            let ggml_type = cursor.read_u32::<LittleEndian>()?;
+            let offset = cursor.read_u64::<LittleEndian>()?;
             tensors.insert(name.clone(), GgufTensorInfo {
                 name,
                 shape,
-                ggml_type: ggml_type as ggml_type,
+                ggml_type,
                 data_offset: offset,
-                data_size,
             });
         }
 
         let alignment = metadata.get("general.alignment")
-            .and_then(|v| v.as_u32()).unwrap_or(32) as u64;
+            .and_then(|v| match v {
+                GgufMetadataValue::Uint32(u) => Some(*u as u64),
+                GgufMetadataValue::Uint64(u) => Some(*u),
+                _ => None
+            }).unwrap_or(32);
+
         let pos = cursor.position();
         let data_section_offset = (pos + alignment - 1) / alignment * alignment;
-        
+
         Ok(GgufIndex { metadata, tensors, data_section_offset, mmap })
     }
 
-    pub fn tensor_data_bytes(&self, name: &str) -> Result<&[u8], GgufError> {
-        let info = self.tensors.get(name)
-            .ok_or_else(|| GgufError::TensorNotFound(name.to_string()))?;
+    pub unsafe fn load_tensor(&self, name: &str, ctx: &Arc<GgmlContext>) -> Result<GgmlTensor, String> {
+        let info = self.tensors.get(name).ok_or_else(|| format!("Tensor not found: {}", name))?;
+        
+        let mut dims = [1i64; 4];
+        for (i, &d) in info.shape.iter().enumerate() {
+            dims[i] = d as i64;
+        }
+
+        println!("DEBUG: Creating tensor '{}' with ggml_type {}, n_dims {}, ne {:?}", name, info.ggml_type, info.shape.len(), dims);
+
+        let t = ggml_new_tensor(ctx.ptr, (info.ggml_type as i32).try_into().unwrap(), info.shape.len() as i32, dims.as_ptr());
+        
+        // Find data size
+        let n_elements = info.shape.iter().product::<usize>();
+        let type_size = ggml_type_size((info.ggml_type as i32).try_into().unwrap());
+        let blck_size = ggml_blck_size((info.ggml_type as i32).try_into().unwrap()) as usize;
+        let data_size = (n_elements * type_size) / blck_size;
+
         let start = (self.data_section_offset + info.data_offset) as usize;
-        let end = start + info.data_size;
-        Ok(&self.mmap[start..end])
-    }
+        let end = start + data_size;
+        let data = &self.mmap[start..end];
 
-    pub unsafe fn load_tensor(&self, name: &str, ctx: Arc<GgmlContext>) -> Result<GgmlTensor, GgufError> {
-        let info = self.tensors.get(name)
-            .ok_or_else(|| GgufError::TensorNotFound(name.to_string()))?;
-        let data = self.tensor_data_bytes(name)?;
-
-        // GGML expects exactly 4 dimensions in ne array.
-        // Unused dimensions MUST be 1.
-        let mut ne: [i64; 4] = [1, 1, 1, 1];
-        let n_dims_raw = info.shape.len();
-        let n_dims = if n_dims_raw > 4 { 4 } else { n_dims_raw };
-        
-        for i in 0..n_dims {
-            ne[i] = info.shape[i] as i64;
-        }
-
-        println!("DEBUG: Creating tensor '{}' with ggml_type {}, n_dims {}, ne {:?}", name, info.ggml_type, n_dims, ne);
-
-        let t = ggml_new_tensor(ctx.ptr, info.ggml_type, n_dims as i32, ne.as_ptr());
-        
-        if t.is_null() {
-            return Err(GgufError::Io(std::io::Error::new(std::io::ErrorKind::Other, format!("ggml_new_tensor returned NULL for {}", name))));
-        }
-
-        // We need to allocate memory on the backend for this context's tensors
+        // Allocate on backend
+        let _guard = ctx.executor.lock.lock().unwrap();
         ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
-        
-        // Move weights to backend memory
-        {
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ggml_backend_tensor_set(t, data.as_ptr() as *const std::ffi::c_void, 0, data.len());
-        }
+        ggml_backend_tensor_set(t, data.as_ptr() as *const c_void, 0, data.len());
 
-        Ok(GgmlTensor::from_raw(t, ctx))
+        Ok(GgmlTensor::from_raw(t, ctx.clone()))
     }
 }
 
 fn read_string(cursor: &mut Cursor<&[u8]>) -> Result<String, std::io::Error> {
-    let len = cursor.read_u64::<LittleEndian>()? as usize;
-    let mut buf = vec![0u8; len];
+    let len = cursor.read_u64::<LittleEndian>()?;
+    let mut buf = vec![0u8; len as usize];
     cursor.read_exact(&mut buf)?;
-    Ok(String::from_utf8_lossy(&buf).to_string())
+    String::from_utf8(buf).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
 }
 
 fn read_value(cursor: &mut Cursor<&[u8]>, val_type: u32) -> Result<GgufMetadataValue, std::io::Error> {
@@ -189,13 +153,16 @@ fn read_value(cursor: &mut Cursor<&[u8]>, val_type: u32) -> Result<GgufMetadataV
         8 => Ok(GgufMetadataValue::String(read_string(cursor)?)),
         9 => {
             let item_type = cursor.read_u32::<LittleEndian>()?;
-            let len = cursor.read_u64::<LittleEndian>()? as usize;
-            let mut items = Vec::new();
+            let len = cursor.read_u64::<LittleEndian>()?;
+            let mut items = Vec::with_capacity(len as usize);
             for _ in 0..len {
                 items.push(read_value(cursor, item_type)?);
             }
             Ok(GgufMetadataValue::Array(items))
         }
-        _ => Err(std::io::Error::new(std::io::ErrorKind::Other, "Unknown GGUF value type")),
+        10 => Ok(GgufMetadataValue::Uint64(cursor.read_u64::<LittleEndian>()?)),
+        11 => Ok(GgufMetadataValue::Int64(cursor.read_i64::<LittleEndian>()?)),
+        12 => Ok(GgufMetadataValue::Float64(cursor.read_f64::<LittleEndian>()?)),
+        _ => Err(std::io::Error::new(std::io::ErrorKind::Other, format!("Unknown GGUF value type: {}", val_type))),
     }
 }

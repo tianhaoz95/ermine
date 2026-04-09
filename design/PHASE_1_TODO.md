@@ -77,7 +77,8 @@ This document tracks the remaining work for **Phase 1 (Linux, wgpu/Vulkan)** as 
   ```
 
 ## P1-T9 — End-to-End Validation
-**Status:** 🔴 Not Started
+**Status:** 🟡 Partial
 - [ ] **Correctness:** Pass `factual::capital_of_china` and `instruction::arithmetic_strict` (deterministic greedy).
+- [x] **Qwen Model Validation:** Successfully run initial layers (Embedding + RMSNorm) of real Qwen model using `burn-ggml`.
 - [ ] **Offload Validation:** Ensure output with N=4 slots matches output with all layers resident.
 - [ ] **Performance:** Benchmark on Intel iGPU (Target: >=1.5 tok/s at 32K context).

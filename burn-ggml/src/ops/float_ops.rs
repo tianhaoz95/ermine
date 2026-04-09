@@ -191,7 +191,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -209,7 +209,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -245,7 +245,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -263,7 +263,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -299,7 +299,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -317,7 +317,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -353,7 +353,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -371,7 +371,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -413,7 +413,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 ctx.executor.compute_graph(gf).expect("Compute failed");
             }
             
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -421,7 +421,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         let ctx = tensor.ctx.clone();
         unsafe {
             let t = ggml_transpose(ctx.ptr, tensor.ptr);
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -513,7 +513,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         let ctx = tensor.ctx.clone();
         unsafe {
             let t = ggml_transpose(ctx.ptr, tensor.ptr);
-            GgmlTensor::from_raw(t, ctx)
+            GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
@@ -541,8 +541,17 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn float_select(tensor: GgmlTensor, _dim: usize, _indices: IntTensor<GgmlBackend>) -> GgmlTensor {
-        todo!()
+    fn float_select(tensor: GgmlTensor, dim: usize, indices: IntTensor<GgmlBackend>) -> GgmlTensor {
+        assert_eq!(dim, 0, "GGML backend only supports select on dim 0 for now");
+        let ctx = tensor.ctx.clone();
+        unsafe {
+            let t = ggml_get_rows(ctx.ptr, tensor.ptr, indices.ptr);
+            let gf = ggml_new_graph(ctx.ptr);
+            ggml_build_forward_expand(gf, t);
+            let _guard = ctx.executor.lock.lock().unwrap();
+            ctx.executor.compute_graph(gf).expect("Compute failed");
+            GgmlTensor::from_raw(t, ctx.clone())
+        }
     }
 
     fn float_clamp(tensor: GgmlTensor, _min: Scalar, _max: Scalar) -> GgmlTensor {

@@ -13,6 +13,7 @@ pub use tensor::*;
 pub use context::*;
 pub use ops::prefetch::*;
 pub use ops::offload::*;
+pub use ops::module_ops::GgmlOps;
 
 #[cfg(test)]
 mod tests {

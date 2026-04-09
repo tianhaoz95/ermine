@@ -2,20 +2,68 @@ use burn::tensor::ops::IntTensorOps;
 use burn::tensor::{Shape, TensorData, IntDType, Scalar, Distribution};
 use burn::tensor::backend::ExecutionError;
 use burn::tensor::Slice;
-use crate::{GgmlBackend, GgmlTensor};
+use crate::{GgmlBackend, GgmlTensor, GgmlContext};
 use std::future::Future;
+use ggml_sys::*;
+use std::ffi::c_void;
 
 impl IntTensorOps<GgmlBackend> for GgmlBackend {
-    fn int_empty(shape: Shape, device: &crate::GgmlDevice, dtype: IntDType) -> GgmlTensor {
-        todo!()
+    fn int_empty(shape: Shape, device: &crate::GgmlDevice, _dtype: IntDType) -> GgmlTensor {
+        let ctx = GgmlContext::get(device);
+        let mut dims = [1i64; 4];
+        let shape_dims = match shape.num_dims() {
+            1 => shape.dims::<1>().to_vec(),
+            2 => shape.dims::<2>().to_vec(),
+            3 => shape.dims::<3>().to_vec(),
+            4 => shape.dims::<4>().to_vec(),
+            _ => panic!("Unsupported dimensions: {}", shape.num_dims()),
+        };
+        for (i, &d) in shape_dims.iter().rev().enumerate() {
+            dims[i] = d as i64;
+        }
+        
+        unsafe {
+            let t = ggml_new_tensor(ctx.ptr, ggml_type_GGML_TYPE_I32, shape.num_dims() as i32, dims.as_ptr());
+            GgmlTensor::from_raw(t, ctx)
+        }
     }
 
     fn int_from_data(data: TensorData, device: &crate::GgmlDevice) -> GgmlTensor {
-        todo!()
+        let shape = data.shape.clone();
+        let tensor = Self::int_empty(shape.into(), device, IntDType::I32);
+        unsafe {
+            let bytes = data.as_slice::<i32>().unwrap();
+            let _guard = tensor.ctx.executor.lock.lock().unwrap();
+            ggml_backend_alloc_ctx_tensors(tensor.ctx.ptr, tensor.ctx.backend);
+            ggml_backend_tensor_set(
+                tensor.ptr,
+                bytes.as_ptr() as *const c_void,
+                0,
+                bytes.len() * std::mem::size_of::<i32>(),
+            );
+        }
+        tensor
     }
 
     fn int_into_data(tensor: GgmlTensor) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
-        async move { todo!() }
+        let ptr = tensor.ptr as usize;
+        let shape = tensor.shape.clone();
+        let ctx = tensor.ctx.clone();
+        async move {
+            let n = shape.iter().product::<usize>();
+            let mut data = vec![0i32; n];
+            unsafe {
+                let ptr = ptr as *mut ggml_tensor;
+                let _guard = ctx.executor.lock.lock().unwrap();
+                ggml_backend_tensor_get(
+                    ptr,
+                    data.as_mut_ptr() as *mut c_void,
+                    0,
+                    data.len() * std::mem::size_of::<i32>(),
+                );
+            }
+            Ok(TensorData::new(data, shape))
+        }
     }
 
     fn int_device(tensor: &GgmlTensor) -> crate::GgmlDevice {
@@ -23,11 +71,33 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
     }
 
     fn int_to_device(tensor: GgmlTensor, device: &crate::GgmlDevice) -> GgmlTensor {
-        todo!()
+        if &tensor.ctx.device == device {
+            return tensor;
+        }
+        
+        let data = Self::int_into_data(tensor);
+        let data = futures::executor::block_on(data).unwrap();
+        Self::int_from_data(data, device)
     }
 
     fn int_reshape(tensor: GgmlTensor, shape: Shape) -> GgmlTensor {
-        todo!()
+        let ctx = tensor.ctx.clone();
+        let mut dims = [1i64; 4];
+        let shape_dims = match shape.num_dims() {
+            1 => shape.dims::<1>().to_vec(),
+            2 => shape.dims::<2>().to_vec(),
+            3 => shape.dims::<3>().to_vec(),
+            4 => shape.dims::<4>().to_vec(),
+            _ => panic!("Unsupported dimensions: {}", shape.num_dims()),
+        };
+        for (i, &d) in shape_dims.iter().rev().enumerate() {
+            dims[i] = d as i64;
+        }
+
+        unsafe {
+            let t = ggml_reshape_4d(ctx.ptr, tensor.ptr, dims[0], dims[1], dims[2], dims[3]);
+            GgmlTensor::from_raw(t, ctx)
+        }
     }
 
     fn int_slice(tensor: GgmlTensor, ranges: &[Slice]) -> GgmlTensor {
