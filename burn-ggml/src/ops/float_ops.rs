@@ -544,8 +544,8 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 rhs_new
             };
 
-            // In GGML, ggml_mul_mat(w, x) where w is weights and x is activations.
-            // w: [d_in, d_out], x: [d_in, seq] -> result: [seq, d_out]
+            // In GGML, ggml_mul_mat computes specialized multiplication
+            // with row-major vs column-major considerations
             let t = ggml_mul_mat(ctx.ptr, rhs_ptr, lhs.ptr);
 
             let gf = ggml_new_graph(ctx.ptr);
