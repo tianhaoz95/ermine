@@ -1,6 +1,6 @@
-use burn::tensor::{Tensor, backend::Backend};
-use burn::tensor::ops::{FloatTensor, IntTensor, BoolTensor};
-use burn::tensor::{Float, Int, Bool};
+use burn::tensor::ops::{BoolTensor, FloatTensor, IntTensor};
+use burn::tensor::{backend::Backend, Tensor};
+use burn::tensor::{Bool, Float, Int};
 
 /// Extension trait to add prefetch capability to Burn's Tensor.
 pub trait TensorPrefetch<B: Backend, const D: usize> {
@@ -17,14 +17,20 @@ impl<B: Backend, const D: usize> TensorPrefetch<B, D> for Tensor<B, D, Float> {
 
 impl<B: Backend, const D: usize> TensorPrefetch<B, D> for Tensor<B, D, Int> {
     fn prefetch(self, device: &B::Device) -> Self {
-        prefetch_dispatch::<B>(PrefetchTensorPrimitive::Int(self.clone().into_primitive()), device);
+        prefetch_dispatch::<B>(
+            PrefetchTensorPrimitive::Int(self.clone().into_primitive()),
+            device,
+        );
         self
     }
 }
 
 impl<B: Backend, const D: usize> TensorPrefetch<B, D> for Tensor<B, D, Bool> {
     fn prefetch(self, device: &B::Device) -> Self {
-        prefetch_dispatch::<B>(PrefetchTensorPrimitive::Bool(self.clone().into_primitive()), device);
+        prefetch_dispatch::<B>(
+            PrefetchTensorPrimitive::Bool(self.clone().into_primitive()),
+            device,
+        );
         self
     }
 }
@@ -67,7 +73,9 @@ impl<B: Backend> From<burn::tensor::TensorPrimitive<B>> for PrefetchTensorPrimit
     fn from(tp: burn::tensor::TensorPrimitive<B>) -> Self {
         match tp {
             burn::tensor::TensorPrimitive::Float(t) => PrefetchTensorPrimitive::Float(t),
-            burn::tensor::TensorPrimitive::QFloat(t) => PrefetchTensorPrimitive::Float(B::dequantize(t)),
+            burn::tensor::TensorPrimitive::QFloat(t) => {
+                PrefetchTensorPrimitive::Float(B::dequantize(t))
+            }
         }
     }
 }

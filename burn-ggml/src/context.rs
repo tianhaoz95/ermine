@@ -1,11 +1,11 @@
-use std::sync::{Arc, Mutex};
-use ggml_sys::*;
 use crate::device::GgmlDevice;
-use crate::graph::GgmlGraphExecutor;
-use crate::memory::{LayerWeightCache, KvOffloadManager};
-use std::collections::HashMap;
-use once_cell::sync::Lazy;
 use crate::gguf::GgufIndex;
+use crate::graph::GgmlGraphExecutor;
+use crate::memory::{KvOffloadManager, LayerWeightCache};
+use ggml_sys::*;
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::OnceCell;
 
 #[derive(Clone, Copy)]
@@ -14,13 +14,11 @@ unsafe impl<T> Send for SyncPtr<T> {}
 unsafe impl<T> Sync for SyncPtr<T> {}
 
 /// A registry of GGML contexts by device.
-static REGISTRY: Lazy<Mutex<HashMap<GgmlDevice, Arc<GgmlContext>>>> = Lazy::new(|| {
-    Mutex::new(HashMap::new())
-});
+static REGISTRY: Lazy<Mutex<HashMap<GgmlDevice, Arc<GgmlContext>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
-static BACKENDS: Lazy<Mutex<HashMap<GgmlDevice, SyncPtr<ggml_backend>>>> = Lazy::new(|| {
-    Mutex::new(HashMap::new())
-});
+static BACKENDS: Lazy<Mutex<HashMap<GgmlDevice, SyncPtr<ggml_backend>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub struct GgmlContext {
     pub(crate) ptr: *mut ggml_context,
@@ -62,17 +60,22 @@ impl GgmlContext {
     }
 
     pub async fn init_cache(&self, index: Arc<GgufIndex>) {
-        let max_layers = if let GgmlDevice::MetalWithOffload { max_layers_in_ram, .. } = &self.device {
+        let max_layers = if let GgmlDevice::MetalWithOffload {
+            max_layers_in_ram, ..
+        } = &self.device
+        {
             *max_layers_in_ram
         } else {
             0
         };
 
         if max_layers > 0 {
-            self.layer_cache.get_or_init(|| async {
-                let ctx_arc = Arc::new(GgmlContext::new(self.device.clone()));
-                Arc::new(LayerWeightCache::new(index.clone(), ctx_arc, max_layers))
-            }).await;
+            self.layer_cache
+                .get_or_init(|| async {
+                    let ctx_arc = Arc::new(GgmlContext::new(self.device.clone()));
+                    Arc::new(LayerWeightCache::new(index.clone(), ctx_arc, max_layers))
+                })
+                .await;
         }
     }
 
@@ -83,16 +86,18 @@ impl GgmlContext {
         }
 
         let b = match device {
-            GgmlDevice::Cpu => unsafe { 
+            GgmlDevice::Cpu => unsafe {
                 let b = ggml_backend_cpu_init();
                 ggml_backend_cpu_set_n_threads(b, num_cpus::get() as i32);
                 b
             },
             GgmlDevice::Metal => {
                 #[cfg(target_os = "macos")]
-                unsafe { ggml_backend_metal_init() }
+                unsafe {
+                    ggml_backend_metal_init()
+                }
                 #[cfg(not(target_os = "macos"))]
-                unsafe { 
+                unsafe {
                     let b = ggml_backend_cpu_init();
                     ggml_backend_cpu_set_n_threads(b, num_cpus::get() as i32);
                     b
@@ -100,9 +105,11 @@ impl GgmlContext {
             }
             GgmlDevice::MetalWithOffload { .. } => {
                 #[cfg(target_os = "macos")]
-                unsafe { ggml_backend_metal_init() }
+                unsafe {
+                    ggml_backend_metal_init()
+                }
                 #[cfg(not(target_os = "macos"))]
-                unsafe { 
+                unsafe {
                     let b = ggml_backend_cpu_init();
                     ggml_backend_cpu_set_n_threads(b, num_cpus::get() as i32);
                     b
@@ -116,9 +123,9 @@ impl GgmlContext {
     pub fn new_work_context(&self) -> Arc<Self> {
         unsafe {
             let params = ggml_init_params {
-                mem_size: 10 * 1024 * 1024,
+                mem_size: 100 * 1024 * 1024,
                 mem_buffer: std::ptr::null_mut(),
-                no_alloc: true, 
+                no_alloc: true,
             };
             let ctx_ptr = ggml_init(params);
 
@@ -148,17 +155,15 @@ impl GgmlContext {
     pub fn new(device: GgmlDevice) -> Self {
         let backend = Self::get_backend(&device);
         let kv_offload = match &device {
-            GgmlDevice::MetalWithOffload { .. } => {
-                Some(Arc::new(KvOffloadManager::new()))
-            }
+            GgmlDevice::MetalWithOffload { .. } => Some(Arc::new(KvOffloadManager::new())),
             _ => None,
         };
 
         unsafe {
             let params = ggml_init_params {
-                mem_size: 1 * 1024 * 1024,
+                mem_size: 100 * 1024 * 1024, // 100MB for metadata
                 mem_buffer: std::ptr::null_mut(),
-                no_alloc: true, 
+                no_alloc: true,
             };
             let ctx = ggml_init(params);
 

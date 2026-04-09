@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use ggml_sys::*;
-use burn::tensor::TensorMetadata;
 use crate::context::GgmlContext;
+use burn::tensor::TensorMetadata;
+use ggml_sys::*;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct GgmlTensor {
@@ -35,7 +35,12 @@ impl GgmlTensor {
         let n_dims = ggml_n_dims(ptr) as usize;
         let shape: Vec<usize> = (0..n_dims).rev().map(|i| ne[i] as usize).collect();
         let dtype = (*ptr).type_;
-        GgmlTensor { ptr, ctx, shape, dtype }
+        GgmlTensor {
+            ptr,
+            ctx,
+            shape,
+            dtype,
+        }
     }
 }
 

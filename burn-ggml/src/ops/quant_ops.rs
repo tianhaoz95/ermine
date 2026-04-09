@@ -1,9 +1,9 @@
-use burn::tensor::ops::QTensorOps;
-use burn::tensor::{TensorData, Shape};
+use crate::{GgmlBackend, GgmlQuantizedTensor, GgmlTensor};
 use burn::tensor::backend::ExecutionError;
+use burn::tensor::ops::QTensorOps;
 use burn::tensor::quantization::{QuantScheme, QuantizationParametersPrimitive};
 use burn::tensor::Slice;
-use crate::{GgmlBackend, GgmlQuantizedTensor, GgmlTensor};
+use burn::tensor::{Shape, TensorData};
 use std::future::Future;
 
 impl QTensorOps<GgmlBackend> for GgmlBackend {
@@ -11,11 +11,17 @@ impl QTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn q_into_data(tensor: GgmlQuantizedTensor) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
+    fn q_into_data(
+        tensor: GgmlQuantizedTensor,
+    ) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
         async move { todo!() }
     }
 
-    fn quantize(tensor: GgmlTensor, scheme: &QuantScheme, parameters: QuantizationParametersPrimitive<GgmlBackend>) -> GgmlQuantizedTensor {
+    fn quantize(
+        tensor: GgmlTensor,
+        scheme: &QuantScheme,
+        parameters: QuantizationParametersPrimitive<GgmlBackend>,
+    ) -> GgmlQuantizedTensor {
         todo!()
     }
 
@@ -51,7 +57,11 @@ impl QTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn q_select(tensor: GgmlQuantizedTensor, dim: usize, indices: GgmlTensor) -> GgmlQuantizedTensor {
+    fn q_select(
+        tensor: GgmlQuantizedTensor,
+        dim: usize,
+        indices: GgmlTensor,
+    ) -> GgmlQuantizedTensor {
         todo!()
     }
 

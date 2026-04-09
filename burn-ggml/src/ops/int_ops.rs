@@ -1,9 +1,9 @@
-use burn::tensor::ops::IntTensorOps;
-use burn::tensor::{Shape, TensorData, IntDType, Scalar, Distribution};
-use burn::tensor::backend::ExecutionError;
-use burn::tensor::Slice;
-use crate::{GgmlBackend, GgmlTensor, GgmlContext};
 use crate::device::GgmlDevice;
+use crate::{GgmlBackend, GgmlContext, GgmlTensor};
+use burn::tensor::backend::ExecutionError;
+use burn::tensor::ops::IntTensorOps;
+use burn::tensor::Slice;
+use burn::tensor::{Distribution, IntDType, Scalar, Shape, TensorData};
 use core::future::Future;
 use ggml_sys::*;
 use std::ffi::c_void;
@@ -22,9 +22,14 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
         for (i, &d) in shape_dims.iter().rev().enumerate() {
             dims[i] = d as i64;
         }
-        
+
         unsafe {
-            let t = ggml_new_tensor(ctx.ptr, ggml_type_GGML_TYPE_I32, shape.num_dims() as i32, dims.as_ptr());
+            let t = ggml_new_tensor(
+                ctx.ptr,
+                ggml_type_GGML_TYPE_I32,
+                shape.num_dims() as i32,
+                dims.as_ptr(),
+            );
             GgmlTensor::from_raw(t, ctx)
         }
     }
@@ -36,29 +41,29 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
             let bytes = data.as_slice::<i32>().unwrap();
             let executor = tensor.ctx.executor.clone();
             let _guard = executor.lock.lock().unwrap();
-            
+
             let buft = ggml_backend_cpu_buffer_type();
             if ggml_get_no_alloc(tensor.ctx.ptr) {
                 ggml_backend_alloc_ctx_tensors_from_buft(tensor.ctx.ptr, buft);
             }
-            
+
             let tensor_bytes = ggml_nbytes(tensor.ptr);
             let data_bytes = bytes.len() * std::mem::size_of::<i32>();
             if data_bytes > tensor_bytes {
-                panic!("int_from_data: data size {} > tensor size {}", data_bytes, tensor_bytes);
+                panic!(
+                    "int_from_data: data size {} > tensor size {}",
+                    data_bytes, tensor_bytes
+                );
             }
 
-            ggml_backend_tensor_set(
-                tensor.ptr,
-                bytes.as_ptr() as *const c_void,
-                0,
-                data_bytes,
-            );
+            ggml_backend_tensor_set(tensor.ptr, bytes.as_ptr() as *const c_void, 0, data_bytes);
         }
         tensor
     }
 
-    fn int_into_data(tensor: GgmlTensor) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
+    fn int_into_data(
+        tensor: GgmlTensor,
+    ) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
         let ptr = tensor.ptr as usize;
         let shape = tensor.shape.clone();
         let ctx = tensor.ctx.clone();
@@ -88,7 +93,7 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
         if &tensor.ctx.device == device {
             return tensor;
         }
-        
+
         let data = Self::int_into_data(tensor);
         let data = futures::executor::block_on(data).unwrap();
         Self::int_from_data(data, device)
@@ -117,14 +122,18 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
     fn int_slice(tensor: GgmlTensor, ranges: &[Slice]) -> GgmlTensor {
         let ctx = tensor.ctx.clone();
         // Simplified slicing: only handle 1D slice for now
-        assert_eq!(tensor.shape.len(), 1, "Only 1D slicing implemented for GGML backend");
+        assert_eq!(
+            tensor.shape.len(),
+            1,
+            "Only 1D slicing implemented for GGML backend"
+        );
         assert_eq!(ranges.len(), 1, "Expected 1 range for 1D tensor");
-        
+
         let range = &ranges[0];
         let start = range.start as usize;
         let end = range.end.unwrap_or(tensor.shape[0] as isize) as usize;
         let size = end - start;
-        
+
         unsafe {
             let offset = start * std::mem::size_of::<i32>();
             let t = ggml_view_1d(ctx.ptr, tensor.ptr, size as i64, offset);
@@ -132,11 +141,7 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
         }
     }
 
-    fn int_slice_assign(
-        _tensor: GgmlTensor,
-        _ranges: &[Slice],
-        _value: GgmlTensor,
-    ) -> GgmlTensor {
+    fn int_slice_assign(_tensor: GgmlTensor, _ranges: &[Slice], _value: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
@@ -276,7 +281,12 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn int_scatter_add(_dim: usize, _tensor: GgmlTensor, _indices: GgmlTensor, _value: GgmlTensor) -> GgmlTensor {
+    fn int_scatter_add(
+        _dim: usize,
+        _tensor: GgmlTensor,
+        _indices: GgmlTensor,
+        _value: GgmlTensor,
+    ) -> GgmlTensor {
         todo!()
     }
 
@@ -302,36 +312,103 @@ impl IntTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn int_remainder(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn int_remainder_scalar(_lhs: GgmlTensor, _rhs: Scalar) -> GgmlTensor { todo!() }
-    fn int_clamp(_tensor: GgmlTensor, _min: Scalar, _max: Scalar) -> GgmlTensor { todo!() }
-    fn int_powf(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn int_powf_scalar(_tensor: GgmlTensor, _value: Scalar) -> GgmlTensor { todo!() }
-    fn int_sign(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
-    fn int_expand(_tensor: GgmlTensor, _shape: Shape) -> GgmlTensor { todo!() }
-    
-    fn bitwise_and(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn bitwise_and_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor { todo!() }
-    fn bitwise_or(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn bitwise_or_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor { todo!() }
-    fn bitwise_xor(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn bitwise_xor_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor { todo!() }
-    fn bitwise_not(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
-    fn bitwise_left_shift(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn bitwise_left_shift_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor { todo!() }
-    fn bitwise_right_shift(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn bitwise_right_shift_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor { todo!() }
-    fn int_cast(_tensor: GgmlTensor, _dtype: IntDType) -> GgmlTensor { todo!() }
-    fn int_unfold(_tensor: GgmlTensor, _dim: usize, _size: usize, _step: usize) -> GgmlTensor { todo!() }
-    fn int_into_float(_tensor: GgmlTensor) -> crate::GgmlTensor { todo!() }
-    fn int_select_add(_tensor: GgmlTensor, _dim: usize, _indices: GgmlTensor, _value: GgmlTensor) -> GgmlTensor { todo!() }
-    fn int_matmul(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor { todo!() }
-    fn int_prod(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
-    fn int_prod_dim(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor { todo!() }
-    fn int_cumsum(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor { todo!() }
-    fn int_cumprod(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor { todo!() }
-    fn int_cummin(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor { todo!() }
-    fn int_cummax(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor { todo!() }
-    fn int_permute(_tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor { todo!() }
-    fn int_flip(_tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor { todo!() }
+    fn int_remainder(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn int_remainder_scalar(_lhs: GgmlTensor, _rhs: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn int_clamp(_tensor: GgmlTensor, _min: Scalar, _max: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn int_powf(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn int_powf_scalar(_tensor: GgmlTensor, _value: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn int_sign(_tensor: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn int_expand(_tensor: GgmlTensor, _shape: Shape) -> GgmlTensor {
+        todo!()
+    }
+
+    fn bitwise_and(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_and_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_or(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_or_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_xor(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_xor_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_not(_tensor: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_left_shift(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_left_shift_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_right_shift(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn bitwise_right_shift_scalar(_tensor: GgmlTensor, _scalar: Scalar) -> GgmlTensor {
+        todo!()
+    }
+    fn int_cast(_tensor: GgmlTensor, _dtype: IntDType) -> GgmlTensor {
+        todo!()
+    }
+    fn int_unfold(_tensor: GgmlTensor, _dim: usize, _size: usize, _step: usize) -> GgmlTensor {
+        todo!()
+    }
+    fn int_into_float(_tensor: GgmlTensor) -> crate::GgmlTensor {
+        todo!()
+    }
+    fn int_select_add(
+        _tensor: GgmlTensor,
+        _dim: usize,
+        _indices: GgmlTensor,
+        _value: GgmlTensor,
+    ) -> GgmlTensor {
+        todo!()
+    }
+    fn int_matmul(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn int_prod(_tensor: GgmlTensor) -> GgmlTensor {
+        todo!()
+    }
+    fn int_prod_dim(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+        todo!()
+    }
+    fn int_cumsum(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+        todo!()
+    }
+    fn int_cumprod(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+        todo!()
+    }
+    fn int_cummin(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+        todo!()
+    }
+    fn int_cummax(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+        todo!()
+    }
+    fn int_permute(_tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor {
+        todo!()
+    }
+    fn int_flip(_tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor {
+        todo!()
+    }
 }

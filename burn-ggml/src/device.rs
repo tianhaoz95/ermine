@@ -1,5 +1,5 @@
-use std::path::PathBuf;
 use burn::tensor::backend::{Device, DeviceId, DeviceOps};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum GgmlDevice {

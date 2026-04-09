@@ -8,20 +8,27 @@ pub struct SimpleTokenizer {
 
 impl SimpleTokenizer {
     pub fn from_index(index: &GgufIndex) -> Self {
-        let tokens = index.metadata.get("tokenizer.ggml.tokens")
+        let tokens = index
+            .metadata
+            .get("tokenizer.ggml.tokens")
             .and_then(|v| {
                 if let GgufMetadataValue::Array(arr) = v {
-                    Some(arr.iter().map(|item| {
-                        if let GgufMetadataValue::String(s) = item {
-                            s.clone()
-                        } else {
-                            panic!("Expected string in tokenizer.ggml.tokens")
-                        }
-                    }).collect::<Vec<_>>())
+                    Some(
+                        arr.iter()
+                            .map(|item| {
+                                if let GgufMetadataValue::String(s) = item {
+                                    s.clone()
+                                } else {
+                                    panic!("Expected string in tokenizer.ggml.tokens")
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    )
                 } else {
                     None
                 }
-            }).expect("Failed to find tokenizer.ggml.tokens in metadata");
+            })
+            .expect("Failed to find tokenizer.ggml.tokens in metadata");
 
         let mut token_to_id = HashMap::new();
         for (i, token) in tokens.iter().enumerate() {
@@ -39,10 +46,10 @@ impl SimpleTokenizer {
         // Real Qwen uses BPE, but this is a placeholder to show the mechanism.
         // Actually, for a real response, we need a real tokenizer.
         // But let's try to match tokens greedily.
-        
+
         let mut ids = Vec::new();
         let mut remaining = text;
-        
+
         while !remaining.is_empty() {
             let mut found = false;
             // Try longest match
@@ -55,13 +62,13 @@ impl SimpleTokenizer {
                     break;
                 }
             }
-            
+
             if !found {
                 // Skip one char if no match (fallback)
                 remaining = &remaining[1..];
             }
         }
-        
+
         ids
     }
 

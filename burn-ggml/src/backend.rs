@@ -1,7 +1,7 @@
-use burn::tensor::backend::{Backend, ExecutionError, DTypeUsage};
+use crate::{GgmlDevice, GgmlQuantizedTensor, GgmlTensor};
+use burn::tensor::backend::{Backend, DTypeUsage, ExecutionError};
 use burn::tensor::ops::TransactionOps;
 use burn::tensor::DType;
-use crate::{GgmlDevice, GgmlTensor, GgmlQuantizedTensor};
 use enumset::EnumSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,13 +12,18 @@ pub fn get_prefetch_count() -> usize {
 }
 
 /// Internal hook for prefetch dispatching.
-pub(crate) fn ggml_prefetch_hook<B: Backend>(primitive: crate::ops::PrefetchTensorPrimitive<B>, device: &B::Device) {
+pub(crate) fn ggml_prefetch_hook<B: Backend>(
+    primitive: crate::ops::PrefetchTensorPrimitive<B>,
+    device: &B::Device,
+) {
     use crate::ops::PrefetchTensorPrimitive;
-    
+
     // We check if B is GgmlBackend by checking its name.
     if B::name(device).starts_with("ggml-") {
         match primitive {
-            PrefetchTensorPrimitive::Float(_) | PrefetchTensorPrimitive::Int(_) | PrefetchTensorPrimitive::Bool(_) => {
+            PrefetchTensorPrimitive::Float(_)
+            | PrefetchTensorPrimitive::Int(_)
+            | PrefetchTensorPrimitive::Bool(_) => {
                 PREFETCH_COUNT.fetch_add(1, Ordering::SeqCst);
             }
         }

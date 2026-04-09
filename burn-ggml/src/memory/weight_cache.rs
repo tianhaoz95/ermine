@@ -1,12 +1,11 @@
-
+use crate::context::GgmlContext;
+use crate::gguf::GgufIndex;
+use crate::tensor::GgmlTensor;
+use lru::LruCache;
+use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tokio::sync::{Mutex, OnceCell};
-use lru::LruCache;
-use std::num::NonZeroUsize;
-use std::collections::HashMap;
-use crate::tensor::GgmlTensor;
-use crate::gguf::GgufIndex;
-use crate::context::GgmlContext;
 
 pub trait CacheKey: std::hash::Hash + Eq + Copy + Send + Sync + 'static {
     fn get_tensors(&self, index: &GgufIndex) -> Vec<String>;
@@ -51,23 +50,38 @@ impl<K: CacheKey> WeightCache<K> {
         WeightCache {
             index,
             ctx,
-            slots: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(max_slots).unwrap()))),
+            slots: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(max_slots).unwrap(),
+            ))),
         }
     }
 
-    async fn load_slot(index: Arc<GgufIndex>, ctx: Arc<GgmlContext>, key: K, slot: Arc<WeightSlot>) {
-        slot.tensors.get_or_init(|| async {
-            let res = tokio::task::spawn_blocking(move || {
-                let tensor_names = key.get_tensors(&index);
-                let mut loaded_tensors = HashMap::new();
-                for name in tensor_names {
-                    let tensor = unsafe { index.load_tensor(&name, &ctx).expect("Failed to load tensor") };
-                    loaded_tensors.insert(name, tensor);
-                }
-                loaded_tensors
-            }).await.expect("Task failed");
-            res
-        }).await;
+    async fn load_slot(
+        index: Arc<GgufIndex>,
+        ctx: Arc<GgmlContext>,
+        key: K,
+        slot: Arc<WeightSlot>,
+    ) {
+        slot.tensors
+            .get_or_init(|| async {
+                let res = tokio::task::spawn_blocking(move || {
+                    let tensor_names = key.get_tensors(&index);
+                    let mut loaded_tensors = HashMap::new();
+                    for name in tensor_names {
+                        let tensor = unsafe {
+                            index
+                                .load_tensor(&name, &ctx)
+                                .expect("Failed to load tensor")
+                        };
+                        loaded_tensors.insert(name, tensor);
+                    }
+                    loaded_tensors
+                })
+                .await
+                .expect("Task failed");
+                res
+            })
+            .await;
     }
 
     pub async fn get(&self, key: K) -> Arc<WeightSlot> {
@@ -86,7 +100,7 @@ impl<K: CacheKey> WeightCache<K> {
         });
         slots.put(key, slot.clone());
         drop(slots);
-        
+
         Self::load_slot(self.index.clone(), self.ctx.clone(), key, slot.clone()).await;
         slot
     }
@@ -96,7 +110,7 @@ impl<K: CacheKey> WeightCache<K> {
             let slots_mutex = self.slots.clone();
             let index = self.index.clone();
             let ctx = self.ctx.clone();
-            
+
             tokio::spawn(async move {
                 let mut slots = slots_mutex.lock().await;
                 if slots.contains(&key) {

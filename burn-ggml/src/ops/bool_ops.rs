@@ -1,8 +1,8 @@
-use burn::tensor::ops::BoolTensorOps;
-use burn::tensor::{Shape, TensorData, Scalar};
-use burn::tensor::backend::ExecutionError;
-use burn::tensor::Slice;
 use crate::{GgmlBackend, GgmlTensor};
+use burn::tensor::backend::ExecutionError;
+use burn::tensor::ops::BoolTensorOps;
+use burn::tensor::Slice;
+use burn::tensor::{Scalar, Shape, TensorData};
 use std::future::Future;
 
 impl BoolTensorOps<GgmlBackend> for GgmlBackend {
@@ -14,7 +14,9 @@ impl BoolTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn bool_into_data(tensor: GgmlTensor) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
+    fn bool_into_data(
+        tensor: GgmlTensor,
+    ) -> impl Future<Output = Result<TensorData, ExecutionError>> + Send {
         async move { todo!() }
     }
 
@@ -102,7 +104,12 @@ impl BoolTensorOps<GgmlBackend> for GgmlBackend {
         todo!()
     }
 
-    fn bool_scatter_or(dim: usize, tensor: GgmlTensor, indices: GgmlTensor, value: GgmlTensor) -> GgmlTensor {
+    fn bool_scatter_or(
+        dim: usize,
+        tensor: GgmlTensor,
+        indices: GgmlTensor,
+        value: GgmlTensor,
+    ) -> GgmlTensor {
         todo!()
     }
 
