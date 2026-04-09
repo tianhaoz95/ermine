@@ -1,4 +1,5 @@
 pub mod qwen;
+pub mod qwen35;
 
 use crate::gguf::{GgufIndex, GgufMetadataValue};
 

@@ -29,26 +29,21 @@ impl GgmlGraphExecutor {
     }
 
     pub unsafe fn compute_graph(&self, gf: *mut ggml_cgraph) -> Result<(), GgmlError> {
-        println!("DEBUG: compute_graph: reset");
         ggml_backend_sched_reset(self.allocr);
 
-        println!("DEBUG: compute_graph: reserve");
         // Ensure enough workspace
         ggml_backend_sched_reserve(self.allocr, gf);
 
-        println!("DEBUG: compute_graph: alloc");
         let ok = ggml_backend_sched_alloc_graph(self.allocr, gf);
         if !ok {
             return Err(GgmlError::AllocationFailed);
         }
 
-        println!("DEBUG: compute_graph: compute");
         let status = ggml_backend_sched_graph_compute(self.allocr, gf);
         if status != ggml_status_GGML_STATUS_SUCCESS {
             return Err(GgmlError::ComputeFailed(status));
         }
 
-        println!("DEBUG: compute_graph: done");
         Ok(())
     }
 }
