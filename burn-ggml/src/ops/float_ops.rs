@@ -1,17 +1,17 @@
 use burn::tensor::ops::{FloatTensorOps, IntTensor};
-use crate::{GgmlBackend, GgmlTensor, GgmlContext};
+use crate::{GgmlBackend, GgmlTensor};
 use burn::tensor::{Shape, TensorData, Distribution, Scalar, FloatDType, Slice};
 use burn::tensor::backend::ExecutionError;
 use crate::device::GgmlDevice;
 use core::future::Future;
 use ggml_sys::*;
-use std::sync::Arc;
 use std::ffi::c_void;
 use num_traits::ToPrimitive;
+use burn::tensor::ops::IntTensorOps;
 
 impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_empty(shape: Shape, device: &GgmlDevice, _dtype: FloatDType) -> GgmlTensor {
-        let ctx = GgmlContext::get(device);
+        let ctx = crate::context::GgmlContext::get(device);
         let mut dims = [1i64; 4];
         let shape_dims = match shape.num_dims() {
             1 => shape.dims::<1>().to_vec(),
@@ -35,8 +35,14 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         let tensor = Self::float_empty(shape.into(), device, FloatDType::F32);
         unsafe {
             let bytes = data.as_slice::<f32>().unwrap();
-            let _guard = tensor.ctx.executor.lock.lock().unwrap();
-            ggml_backend_alloc_ctx_tensors(tensor.ctx.ptr, tensor.ctx.backend);
+            let executor = tensor.ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            
+            let buft = ggml_backend_cpu_buffer_type();
+            if ggml_get_no_alloc(tensor.ctx.ptr) {
+                ggml_backend_alloc_ctx_tensors_from_buft(tensor.ctx.ptr, buft);
+            }
+            
             ggml_backend_tensor_set(
                 tensor.ptr,
                 bytes.as_ptr() as *const c_void,
@@ -56,7 +62,8 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             let mut data = vec![0.0f32; n];
             unsafe {
                 let ptr = ptr as *mut ggml_tensor;
-                let _guard = ctx.executor.lock.lock().unwrap();
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
                 ggml_backend_tensor_get(
                     ptr,
                     data.as_mut_ptr() as *mut c_void,
@@ -78,7 +85,6 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         }
         
         let data = Self::float_into_data(tensor);
-        // This is a bit inefficient but safe for a backend bridge
         let data = futures::executor::block_on(data).unwrap();
         Self::float_from_data(data, device)
     }
@@ -103,8 +109,42 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         }
     }
 
-    fn float_slice(tensor: GgmlTensor, _ranges: &[Slice]) -> GgmlTensor {
-        todo!()
+    fn float_slice(tensor: GgmlTensor, ranges: &[Slice]) -> GgmlTensor {
+        let ctx = tensor.ctx.clone();
+        
+        if tensor.shape.len() == 1 {
+            let range = &ranges[0];
+            let start = range.start as usize;
+            let end = range.end.unwrap_or(tensor.shape[0] as isize) as usize;
+            let size = end - start;
+            
+            unsafe {
+                let offset = start * std::mem::size_of::<f32>();
+                let t = ggml_view_1d(ctx.ptr, tensor.ptr, size as i64, offset);
+                GgmlTensor::from_raw(t, ctx)
+            }
+        } else if tensor.shape.len() == 2 {
+            let r0 = &ranges[0];
+            let r1 = if ranges.len() > 1 { &ranges[1] } else { &Slice::new(0, None, 1) };
+            
+            let start0 = r0.start as usize;
+            let end0 = r0.end.unwrap_or(tensor.shape[0] as isize) as usize;
+            let start1 = r1.start as usize;
+            let end1 = r1.end.unwrap_or(tensor.shape[1] as isize) as usize;
+            
+            let ne0 = tensor.shape[1]; // GGML ne0
+            
+            let size0 = end0 - start0;
+            let size1 = end1 - start1;
+            
+            unsafe {
+                let offset = (start0 * ne0 + start1) * std::mem::size_of::<f32>();
+                let t = ggml_view_2d(ctx.ptr, tensor.ptr, size1 as i64, size0 as i64, ne0 * std::mem::size_of::<f32>(), offset);
+                GgmlTensor::from_raw(t, ctx)
+            }
+        } else {
+            todo!("Slicing for dims > 2 not implemented")
+        }
     }
 
     fn float_slice_assign(
@@ -162,7 +202,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_add(lhs: GgmlTensor, rhs: GgmlTensor) -> GgmlTensor {
         let ctx = lhs.ctx.clone();
         unsafe {
-            let rhs_ptr = if Arc::ptr_eq(&lhs.ctx, &rhs.ctx) {
+            let rhs_ptr = if lhs.ctx.backend == rhs.ctx.backend {
                 rhs.ptr
             } else {
                 let mut dims = [1i64; 4];
@@ -171,12 +211,17 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 }
                 let rhs_new = ggml_new_tensor(ctx.ptr, rhs.dtype, rhs.shape.len() as i32, dims.as_ptr());
                 {
-                    let _guard_rhs = rhs.ctx.executor.lock.lock().unwrap();
+                    let executor_rhs = rhs.ctx.executor.clone();
+                    let _guard_rhs = executor_rhs.lock.lock().unwrap();
                     let mut rhs_data = vec![0u8; ggml_nbytes(rhs.ptr)];
                     ggml_backend_tensor_get(rhs.ptr, rhs_data.as_mut_ptr() as *mut c_void, 0, rhs_data.len());
                     
-                    let _guard_lhs = ctx.executor.lock.lock().unwrap();
-                    ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
+                    let executor_lhs = ctx.executor.clone();
+                    let _guard_lhs = executor_lhs.lock.lock().unwrap();
+                    let buft = ggml_backend_cpu_buffer_type();
+                    if ggml_get_no_alloc(ctx.ptr) {
+                        ggml_backend_alloc_ctx_tensors_from_buft(ctx.ptr, buft);
+                    }
                     ggml_backend_tensor_set(rhs_new, rhs_data.as_ptr() as *const c_void, 0, rhs_data.len());
                 }
                 rhs_new
@@ -187,8 +232,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -205,8 +251,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -216,7 +263,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_sub(lhs: GgmlTensor, rhs: GgmlTensor) -> GgmlTensor {
         let ctx = lhs.ctx.clone();
         unsafe {
-            let rhs_ptr = if Arc::ptr_eq(&lhs.ctx, &rhs.ctx) {
+            let rhs_ptr = if lhs.ctx.backend == rhs.ctx.backend {
                 rhs.ptr
             } else {
                 let mut dims = [1i64; 4];
@@ -225,12 +272,17 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 }
                 let rhs_new = ggml_new_tensor(ctx.ptr, rhs.dtype, rhs.shape.len() as i32, dims.as_ptr());
                 {
-                    let _guard_rhs = rhs.ctx.executor.lock.lock().unwrap();
+                    let executor_rhs = rhs.ctx.executor.clone();
+                    let _guard_rhs = executor_rhs.lock.lock().unwrap();
                     let mut rhs_data = vec![0u8; ggml_nbytes(rhs.ptr)];
                     ggml_backend_tensor_get(rhs.ptr, rhs_data.as_mut_ptr() as *mut c_void, 0, rhs_data.len());
                     
-                    let _guard_lhs = ctx.executor.lock.lock().unwrap();
-                    ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
+                    let executor_lhs = ctx.executor.clone();
+                    let _guard_lhs = executor_lhs.lock.lock().unwrap();
+                    let buft = ggml_backend_cpu_buffer_type();
+                    if ggml_get_no_alloc(ctx.ptr) {
+                        ggml_backend_alloc_ctx_tensors_from_buft(ctx.ptr, buft);
+                    }
                     ggml_backend_tensor_set(rhs_new, rhs_data.as_ptr() as *const c_void, 0, rhs_data.len());
                 }
                 rhs_new
@@ -241,8 +293,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -259,8 +312,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -270,7 +324,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_mul(lhs: GgmlTensor, rhs: GgmlTensor) -> GgmlTensor {
         let ctx = lhs.ctx.clone();
         unsafe {
-            let rhs_ptr = if Arc::ptr_eq(&lhs.ctx, &rhs.ctx) {
+            let rhs_ptr = if lhs.ctx.backend == rhs.ctx.backend {
                 rhs.ptr
             } else {
                 let mut dims = [1i64; 4];
@@ -279,12 +333,17 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 }
                 let rhs_new = ggml_new_tensor(ctx.ptr, rhs.dtype, rhs.shape.len() as i32, dims.as_ptr());
                 {
-                    let _guard_rhs = rhs.ctx.executor.lock.lock().unwrap();
+                    let executor_rhs = rhs.ctx.executor.clone();
+                    let _guard_rhs = executor_rhs.lock.lock().unwrap();
                     let mut rhs_data = vec![0u8; ggml_nbytes(rhs.ptr)];
                     ggml_backend_tensor_get(rhs.ptr, rhs_data.as_mut_ptr() as *mut c_void, 0, rhs_data.len());
                     
-                    let _guard_lhs = ctx.executor.lock.lock().unwrap();
-                    ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
+                    let executor_lhs = ctx.executor.clone();
+                    let _guard_lhs = executor_lhs.lock.lock().unwrap();
+                    let buft = ggml_backend_cpu_buffer_type();
+                    if ggml_get_no_alloc(ctx.ptr) {
+                        ggml_backend_alloc_ctx_tensors_from_buft(ctx.ptr, buft);
+                    }
                     ggml_backend_tensor_set(rhs_new, rhs_data.as_ptr() as *const c_void, 0, rhs_data.len());
                 }
                 rhs_new
@@ -295,8 +354,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -313,8 +373,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -324,7 +385,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_div(lhs: GgmlTensor, rhs: GgmlTensor) -> GgmlTensor {
         let ctx = lhs.ctx.clone();
         unsafe {
-            let rhs_ptr = if Arc::ptr_eq(&lhs.ctx, &rhs.ctx) {
+            let rhs_ptr = if lhs.ctx.backend == rhs.ctx.backend {
                 rhs.ptr
             } else {
                 let mut dims = [1i64; 4];
@@ -333,12 +394,17 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
                 }
                 let rhs_new = ggml_new_tensor(ctx.ptr, rhs.dtype, rhs.shape.len() as i32, dims.as_ptr());
                 {
-                    let _guard_rhs = rhs.ctx.executor.lock.lock().unwrap();
+                    let executor_rhs = rhs.ctx.executor.clone();
+                    let _guard_rhs = executor_rhs.lock.lock().unwrap();
                     let mut rhs_data = vec![0u8; ggml_nbytes(rhs.ptr)];
                     ggml_backend_tensor_get(rhs.ptr, rhs_data.as_mut_ptr() as *mut c_void, 0, rhs_data.len());
                     
-                    let _guard_lhs = ctx.executor.lock.lock().unwrap();
-                    ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
+                    let executor_lhs = ctx.executor.clone();
+                    let _guard_lhs = executor_lhs.lock.lock().unwrap();
+                    let buft = ggml_backend_cpu_buffer_type();
+                    if ggml_get_no_alloc(ctx.ptr) {
+                        ggml_backend_alloc_ctx_tensors_from_buft(ctx.ptr, buft);
+                    }
                     ggml_backend_tensor_set(rhs_new, rhs_data.as_ptr() as *const c_void, 0, rhs_data.len());
                 }
                 rhs_new
@@ -349,8 +415,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -367,8 +434,9 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -378,39 +446,43 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_matmul(lhs: GgmlTensor, rhs: GgmlTensor) -> GgmlTensor {
         let ctx = lhs.ctx.clone();
         unsafe {
-            let rhs_ptr = if Arc::ptr_eq(&lhs.ctx, &rhs.ctx) {
+            let rhs_ptr = if lhs.ctx.backend == rhs.ctx.backend {
                 rhs.ptr
             } else {
+                // ... fallback copy if different backends ...
                 let mut dims = [1i64; 4];
                 for (i, &d) in rhs.shape.iter().rev().enumerate() {
                     dims[i] = d as i64;
                 }
                 let rhs_new = ggml_new_tensor(ctx.ptr, rhs.dtype, rhs.shape.len() as i32, dims.as_ptr());
                 {
-                    let _guard_rhs = rhs.ctx.executor.lock.lock().unwrap();
+                    let executor_rhs = rhs.ctx.executor.clone();
+                    let _guard_rhs = executor_rhs.lock.lock().unwrap();
                     let mut rhs_data = vec![0u8; ggml_nbytes(rhs.ptr)];
                     ggml_backend_tensor_get(rhs.ptr, rhs_data.as_mut_ptr() as *mut c_void, 0, rhs_data.len());
                     
-                    let _guard_lhs = ctx.executor.lock.lock().unwrap();
-                    ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
+                    let executor_lhs = ctx.executor.clone();
+                    let _guard_lhs = executor_lhs.lock.lock().unwrap();
+                    let buft = ggml_backend_cpu_buffer_type();
+                    if ggml_get_no_alloc(ctx.ptr) {
+                        ggml_backend_alloc_ctx_tensors_from_buft(ctx.ptr, buft);
+                    }
                     ggml_backend_tensor_set(rhs_new, rhs_data.as_ptr() as *const c_void, 0, rhs_data.len());
                 }
                 rhs_new
             };
 
-            // Fix orientation: ggml_mul_mat(a, b) -> a @ b^T
-            let rhs_t = ggml_transpose(ctx.ptr, rhs_ptr);
-            let rhs_cont = ggml_cont(ctx.ptr, rhs_t);
-            let t_view = ggml_mul_mat(ctx.ptr, lhs.ptr, rhs_cont);
-            let t_trans = ggml_transpose(ctx.ptr, t_view);
-            let t = ggml_cont(ctx.ptr, t_trans);
+            // In GGML, ggml_mul_mat(w, x) where w is weights and x is activations.
+            // w: [d_in, d_out], x: [d_in, seq] -> result: [seq, d_out]
+            let t = ggml_mul_mat(ctx.ptr, rhs_ptr, lhs.ptr);
             
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, t);
             
             {
-                let _guard = ctx.executor.lock.lock().unwrap();
-                ctx.executor.compute_graph(gf).expect("Compute failed");
+                let executor = ctx.executor.clone();
+                let _guard = executor.lock.lock().unwrap();
+                executor.compute_graph(gf).expect("Compute failed");
             }
             
             GgmlTensor::from_raw(t, ctx.clone())
@@ -436,76 +508,106 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_zeros(shape: Shape, device: &GgmlDevice, dtype: FloatDType) -> GgmlTensor { 
         let t = Self::float_empty(shape, device, dtype);
         unsafe {
-            let _guard = t.ctx.executor.lock.lock().unwrap();
-            ggml_backend_alloc_ctx_tensors(t.ctx.ptr, t.ctx.backend);
+            let executor = t.ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            let buft = ggml_backend_cpu_buffer_type();
+            if ggml_get_no_alloc(t.ctx.ptr) {
+                ggml_backend_alloc_ctx_tensors_from_buft(t.ctx.ptr, buft);
+            }
             std::ptr::write_bytes(ggml_get_data(t.ptr), 0, ggml_nbytes(t.ptr));
         }
         t
     }
 
-    fn float_ones(shape: Shape, device: &GgmlDevice, dtype: FloatDType) -> GgmlTensor {
+    fn float_ones(shape: Shape, device: &GgmlDevice, _dtype: FloatDType) -> GgmlTensor {
         let n = shape.iter().product::<usize>();
         let data = vec![1.0f32; n];
         Self::float_from_data(TensorData::new(data, shape), device)
     }
 
-    fn float_into_int(tensor: GgmlTensor) -> IntTensor<GgmlBackend> {
+    fn float_into_int(_tensor: GgmlTensor) -> IntTensor<GgmlBackend> {
         todo!()
     }
 
-    fn float_powf_scalar(tensor: GgmlTensor, _value: Scalar) -> GgmlTensor {
+    fn float_powf_scalar(_tensor: GgmlTensor, _value: Scalar) -> GgmlTensor {
         todo!()
     }
 
-    fn float_sqrt(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_sqrt(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_abs(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_abs(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_cos(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_cos(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_sin(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_sin(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_tanh(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_tanh(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_erf(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_erf(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_argmax(tensor: GgmlTensor, _dim: usize) -> IntTensor<GgmlBackend> {
+    fn float_argmax(tensor: GgmlTensor, dim: usize) -> IntTensor<GgmlBackend> {
+        let data = futures::executor::block_on(Self::float_into_data(tensor.clone())).unwrap();
+        let shape = tensor.shape.clone();
+        let values = data.as_slice::<f32>().unwrap();
+        
+        let mut result_shape_dims = shape.clone();
+        result_shape_dims.remove(dim);
+        
+        let mut argmax_indices = Vec::new();
+        
+        if dim == 0 && shape.len() == 1 {
+            let mut max_val = f32::NEG_INFINITY;
+            let mut max_idx = 0;
+            for (i, &v) in values.iter().enumerate() {
+                if v > max_val {
+                    max_val = v;
+                    max_idx = i;
+                }
+            }
+            argmax_indices.push(max_idx as i32);
+        } else {
+            todo!("General argmax not implemented for shape {:?} dim {}", shape, dim)
+        }
+        
+        GgmlBackend::int_from_data(
+            TensorData::new(argmax_indices, result_shape_dims),
+            &tensor.ctx.device
+        )
+    }
+
+    fn float_argmin(_tensor: GgmlTensor, _dim: usize) -> IntTensor<GgmlBackend> {
         todo!()
     }
 
-    fn float_argmin(tensor: GgmlTensor, _dim: usize) -> IntTensor<GgmlBackend> {
+    fn float_max_dim(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
         todo!()
     }
 
-    fn float_max_dim(tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+    fn float_max_dim_with_indices(_tensor: GgmlTensor, _dim: usize) -> (GgmlTensor, IntTensor<GgmlBackend>) {
         todo!()
     }
 
-    fn float_max_dim_with_indices(tensor: GgmlTensor, _dim: usize) -> (GgmlTensor, IntTensor<GgmlBackend>) {
+    fn float_min_dim(_tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
         todo!()
     }
 
-    fn float_min_dim(tensor: GgmlTensor, _dim: usize) -> GgmlTensor {
+    fn float_min_dim_with_indices(_tensor: GgmlTensor, _dim: usize) -> (GgmlTensor, IntTensor<GgmlBackend>) {
         todo!()
     }
 
-    fn float_min_dim_with_indices(tensor: GgmlTensor, _dim: usize) -> (GgmlTensor, IntTensor<GgmlBackend>) {
-        todo!()
-    }
-
-    fn float_recip(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_recip(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
@@ -517,19 +619,19 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
         }
     }
 
-    fn float_permute(tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor {
+    fn float_permute(_tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor {
         todo!()
     }
 
-    fn float_flip(tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor {
+    fn float_flip(_tensor: GgmlTensor, _dims: &[usize]) -> GgmlTensor {
         todo!()
     }
 
-    fn float_mask_where(tensor: GgmlTensor, _mask: GgmlTensor, _value: GgmlTensor) -> GgmlTensor {
+    fn float_mask_where(_tensor: GgmlTensor, _mask: GgmlTensor, _value: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_mask_fill(tensor: GgmlTensor, _mask: GgmlTensor, _value: Scalar) -> GgmlTensor {
+    fn float_mask_fill(_tensor: GgmlTensor, _mask: GgmlTensor, _value: Scalar) -> GgmlTensor {
         todo!()
     }
 
@@ -548,29 +650,30 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
             let t = ggml_get_rows(ctx.ptr, tensor.ptr, indices.ptr);
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, t);
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ctx.executor.compute_graph(gf).expect("Compute failed");
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
             GgmlTensor::from_raw(t, ctx.clone())
         }
     }
 
-    fn float_clamp(tensor: GgmlTensor, _min: Scalar, _max: Scalar) -> GgmlTensor {
+    fn float_clamp(_tensor: GgmlTensor, _min: Scalar, _max: Scalar) -> GgmlTensor {
         todo!()
     }
 
-    fn float_powf(lhs: GgmlTensor, rhs: GgmlTensor) -> GgmlTensor {
+    fn float_powf(_lhs: GgmlTensor, _rhs: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_sign(tensor: GgmlTensor) -> GgmlTensor {
+    fn float_sign(_tensor: GgmlTensor) -> GgmlTensor {
         todo!()
     }
 
-    fn float_expand(tensor: GgmlTensor, _shape: Shape) -> GgmlTensor {
+    fn float_expand(_tensor: GgmlTensor, _shape: Shape) -> GgmlTensor {
         todo!()
     }
 
-    fn float_unfold(tensor: GgmlTensor, _dim: usize, _size: usize, _step: usize) -> GgmlTensor {
+    fn float_unfold(_tensor: GgmlTensor, _dim: usize, _size: usize, _step: usize) -> GgmlTensor {
         todo!()
     }
 
@@ -601,7 +704,7 @@ impl FloatTensorOps<GgmlBackend> for GgmlBackend {
     fn float_floor(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
     fn float_ceil(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
     fn float_trunc(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
-    fn float_exp(tensor: GgmlTensor) -> GgmlTensor { todo!() }
-    fn float_log(tensor: GgmlTensor) -> GgmlTensor { todo!() }
-    fn float_log1p(tensor: GgmlTensor) -> GgmlTensor { todo!() }
+    fn float_exp(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
+    fn float_log(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
+    fn float_log1p(_tensor: GgmlTensor) -> GgmlTensor { todo!() }
 }

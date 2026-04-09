@@ -102,6 +102,25 @@ impl GgufIndex {
         Ok(GgufIndex { metadata, tensors, data_section_offset, mmap })
     }
 
+    pub fn get_layer_tensors(&self, layer_idx: usize) -> Vec<String> {
+        let prefix = format!("blk.{}.", layer_idx);
+        self.tensors.keys()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_expert_tensors(&self, layer_idx: usize, expert_idx: usize) -> Vec<String> {
+        // llama.cpp naming for MoE: blk.N.ffn_gate.M.weight etc? 
+        // Need to check actual naming. For Gemma 4 MoE it might be different.
+        // Assuming blk.N.ffn_expert.M prefix for now.
+        let prefix = format!("blk.{}.ffn_expert.{}.", layer_idx, expert_idx);
+        self.tensors.keys()
+            .filter(|name| name.starts_with(&prefix))
+            .cloned()
+            .collect()
+    }
+
     pub unsafe fn load_tensor(&self, name: &str, ctx: &Arc<GgmlContext>) -> Result<GgmlTensor, String> {
         let info = self.tensors.get(name).ok_or_else(|| format!("Tensor not found: {}", name))?;
         
@@ -109,8 +128,6 @@ impl GgufIndex {
         for (i, &d) in info.shape.iter().enumerate() {
             dims[i] = d as i64;
         }
-
-        println!("DEBUG: Creating tensor '{}' with ggml_type {}, n_dims {}, ne {:?}", name, info.ggml_type, info.shape.len(), dims);
 
         let t = ggml_new_tensor(ctx.ptr, (info.ggml_type as i32).try_into().unwrap(), info.shape.len() as i32, dims.as_ptr());
         
@@ -125,7 +142,7 @@ impl GgufIndex {
         let data = &self.mmap[start..end];
 
         // Allocate on backend
-        let _guard = ctx.executor.lock.lock().unwrap();
+        let executor = ctx.executor.clone(); let _guard = executor.lock.lock().unwrap();
         ggml_backend_alloc_ctx_tensors(ctx.ptr, ctx.backend);
         ggml_backend_tensor_set(t, data.as_ptr() as *const c_void, 0, data.len());
 

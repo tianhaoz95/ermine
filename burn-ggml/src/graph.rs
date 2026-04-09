@@ -24,21 +24,20 @@ impl GgmlGraphExecutor {
         }
     }
 
-    pub unsafe fn compute(&self, gf: *mut ggml_cgraph) -> Result<(), GgmlError> {
-        let _guard = self.lock.lock().unwrap();
-        self.compute_graph(gf)
-    }
-
     pub unsafe fn compute_graph(&self, gf: *mut ggml_cgraph) -> Result<(), GgmlError> {
+        let _guard = self.lock.lock().unwrap();
+
+        println!("DEBUG: Starting compute_graph");
         ggml_backend_sched_reset(self.allocr);
+
+        // Ensure enough workspace
+        ggml_backend_sched_reserve(self.allocr, gf);
+
         let ok = ggml_backend_sched_alloc_graph(self.allocr, gf);
         if !ok {
-            ggml_backend_sched_reserve(self.allocr, gf);
-            let ok2 = ggml_backend_sched_alloc_graph(self.allocr, gf);
-            if !ok2 {
-                return Err(GgmlError::AllocationFailed);
-            }
+            return Err(GgmlError::AllocationFailed);
         }
+
         let status = ggml_backend_sched_graph_compute(self.allocr, gf);
         if status != ggml_status_GGML_STATUS_SUCCESS {
             return Err(GgmlError::ComputeFailed(status));

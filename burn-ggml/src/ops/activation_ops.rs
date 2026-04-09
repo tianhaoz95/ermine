@@ -10,8 +10,8 @@ impl ActivationOps<GgmlBackend> for GgmlBackend {
             let t = ggml_relu(ctx.ptr, tensor.ptr);
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, t);
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ctx.executor.compute_graph(gf).expect("Compute failed");
+            let executor = ctx.executor.clone(); let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
             GgmlTensor::from_raw(t, ctx.clone())
         }
     }
@@ -26,8 +26,8 @@ impl ActivationOps<GgmlBackend> for GgmlBackend {
             let t = ggml_sigmoid(ctx.ptr, tensor.ptr);
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, t);
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ctx.executor.compute_graph(gf).expect("Compute failed");
+            let executor = ctx.executor.clone(); let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
             GgmlTensor::from_raw(t, ctx.clone())
         }
     }

@@ -1,10 +1,13 @@
 use burn_ggml::{GgmlBackend, GgmlDevice, gguf::GgufIndex, GgmlContext, GgmlOps};
+use burn_ggml::memory::LayerKey;
 use burn::tensor::{Tensor, Float, Int, TensorPrimitive};
 use burn::tensor::ops::ModuleOps;
 use std::path::Path;
+use std::sync::Arc;
+use std::path::PathBuf;
 
-#[test]
-fn test_qwen_inference_burn_ggml() {
+#[tokio::test]
+async fn test_qwen_inference_burn_ggml() {
     // Model from: https://huggingface.co/unsloth/Qwen3.5-2B-GGUF
     let model_file = "../Qwen3.5-2B-Q4_K_M.gguf";
 
@@ -15,36 +18,39 @@ fn test_qwen_inference_burn_ggml() {
     }
 
     println!("Loading Qwen model from: {}", model_file);
-    let index = GgufIndex::open(model_file).expect("Failed to open GGUF index");
-    let device = GgmlDevice::Cpu;
+    let index = Arc::new(GgufIndex::open(model_file).expect("Failed to open GGUF index"));
+    let device = GgmlDevice::MetalWithOffload {
+        kv_cache_dir: PathBuf::from("kv_cache"),
+        max_layers_in_ram: 4,
+    };
     let ctx = GgmlContext::get(&device);
+    ctx.init_cache(index.clone()).await;
 
-    // 1. Load Embedding Weights
+    // 1. Load Embedding Weights (normally not in cache, but let's load it manually)
     println!("Loading embedding weights...");
     let embd_primitive = unsafe { 
         index.load_tensor("token_embd.weight", &ctx).expect("Failed to load token_embd.weight") 
     };
     let embd_weight: Tensor<GgmlBackend, 2, Float> = Tensor::from_primitive(TensorPrimitive::Float(embd_primitive));
 
-    // 2. Load Layer 0 Attention Norm Weights
-    println!("Loading layer 0 attn_norm weights...");
-    let norm_primitive = unsafe {
-        index.load_tensor("blk.0.attn_norm.weight", &ctx).expect("Failed to load blk.0.attn_norm.weight")
-    };
-    let norm_weight: Tensor<GgmlBackend, 1, Float> = Tensor::from_primitive(TensorPrimitive::Float(norm_primitive));
+    // 2. Load Layer 0 Attention Norm Weights via Cache
+    println!("Loading layer 0 weights via cache...");
+    let cache = ctx.layer_cache.get().expect("Cache not initialized");
+    let slot0 = cache.get(LayerKey { layer: 0 }).await;
+    let tensors0 = slot0.tensors.get().expect("Tensors not loaded");
+    
+    let norm_weight_primitive = tensors0.get("blk.0.attn_norm.weight").expect("Failed to find blk.0.attn_norm.weight in cache");
+    let norm_weight: Tensor<GgmlBackend, 1, Float> = Tensor::from_primitive(TensorPrimitive::Float(norm_weight_primitive.clone()));
 
     // 3. Prepare Input (dummy token IDs)
-    // "What" in Qwen might be token 1234 (just dummy for test)
     let input_ids = Tensor::<GgmlBackend, 1, Int>::from_data([1234i32, 5678i32], &device);
 
     // 4. Run Inference (Embedding + RMSNorm)
     println!("Running Embedding...");
-    // Use associated function syntax for ModuleOps::embedding
     let x_primitive = GgmlBackend::embedding(embd_weight.into_primitive().tensor(), input_ids.into_primitive());
     let x: Tensor<GgmlBackend, 2, Float> = Tensor::from_primitive(TensorPrimitive::Float(x_primitive));
     
     println!("Running RMSNorm...");
-    // GgmlOps extension
     let x_primitive = match x.into_primitive() {
         TensorPrimitive::Float(p) => p,
         _ => panic!("Expected Float primitive"),
@@ -64,5 +70,5 @@ fn test_qwen_inference_burn_ggml() {
     
     let sum: f32 = values.iter().sum();
     assert!(sum.abs() > 1e-5, "Output should not be zero");
-    println!("Success: Inference pass through Embedding + RMSNorm completed.");
+    println!("Success: Inference pass through Embedding + RMSNorm completed using WeightCache.");
 }

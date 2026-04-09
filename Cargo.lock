@@ -747,6 +747,7 @@ dependencies = [
  "lru 0.12.5",
  "memmap2",
  "num-traits",
+ "num_cpus",
  "once_cell",
  "rand 0.8.5",
  "serde",

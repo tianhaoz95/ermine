@@ -1,20 +1,20 @@
 use burn::tensor::ops::ModuleOps;
-use crate::{GgmlBackend, GgmlTensor, GgmlContext};
-use burn::tensor::backend::ExecutionError;
+use crate::{GgmlBackend, GgmlTensor};
 use ggml_sys::*;
-use std::sync::Arc;
 use burn::tensor::ops::*;
 
 impl ModuleOps<GgmlBackend> for GgmlBackend {
     fn embedding(weight: GgmlTensor, indices: GgmlTensor) -> GgmlTensor {
-        let ctx = weight.ctx.clone();
+        let ctx = indices.ctx.clone();
+        println!("DEBUG: embedding start");
         unsafe {
             // ggml_get_rows: rows of weight indexed by indices
             let out = ggml_get_rows(ctx.ptr, weight.ptr, indices.ptr);
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, out);
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ctx.executor.compute_graph(gf).expect("Compute failed");
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
             GgmlTensor::from_raw(out, ctx.clone())
         }
     }
@@ -43,6 +43,9 @@ impl ModuleOps<GgmlBackend> for GgmlBackend {
 pub trait GgmlOps {
     fn rms_norm(x: GgmlTensor, weight: GgmlTensor, eps: f32) -> GgmlTensor;
     fn silu(x: GgmlTensor) -> GgmlTensor;
+    fn softmax(x: GgmlTensor) -> GgmlTensor;
+    fn rope(x: GgmlTensor, positions: GgmlTensor, n_dims: i32, mode: i32, n_ctx_orig: i32, freq_base: f32, freq_scale: f32) -> GgmlTensor;
+    fn flash_attn(q: GgmlTensor, k: GgmlTensor, v: GgmlTensor, mask: Option<GgmlTensor>, scale: f32) -> GgmlTensor;
 }
 
 impl GgmlOps for GgmlBackend {
@@ -53,8 +56,9 @@ impl GgmlOps for GgmlBackend {
             let out = ggml_mul(ctx.ptr, normed, weight.ptr);
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, out);
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ctx.executor.compute_graph(gf).expect("Compute failed");
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
             GgmlTensor::from_raw(out, ctx.clone())
         }
     }
@@ -65,8 +69,53 @@ impl GgmlOps for GgmlBackend {
             let out = ggml_silu(ctx.ptr, x.ptr);
             let gf = ggml_new_graph(ctx.ptr);
             ggml_build_forward_expand(gf, out);
-            let _guard = ctx.executor.lock.lock().unwrap();
-            ctx.executor.compute_graph(gf).expect("Compute failed");
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
+            GgmlTensor::from_raw(out, ctx.clone())
+        }
+    }
+
+    fn softmax(x: GgmlTensor) -> GgmlTensor {
+        let ctx = x.ctx.clone();
+        unsafe {
+            let out = ggml_soft_max(ctx.ptr, x.ptr);
+            let gf = ggml_new_graph(ctx.ptr);
+            ggml_build_forward_expand(gf, out);
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
+            GgmlTensor::from_raw(out, ctx.clone())
+        }
+    }
+
+    fn rope(x: GgmlTensor, positions: GgmlTensor, n_dims: i32, mode: i32, n_ctx_orig: i32, freq_base: f32, freq_scale: f32) -> GgmlTensor {
+        let ctx = x.ctx.clone();
+        unsafe {
+            let out = ggml_rope_ext(
+                ctx.ptr, x.ptr, positions.ptr, std::ptr::null_mut(),
+                n_dims, mode, n_ctx_orig, freq_base, freq_scale,
+                0.0, 1.0, 0.0, 0.0
+            );
+            let gf = ggml_new_graph(ctx.ptr);
+            ggml_build_forward_expand(gf, out);
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
+            GgmlTensor::from_raw(out, ctx.clone())
+        }
+    }
+
+    fn flash_attn(q: GgmlTensor, k: GgmlTensor, v: GgmlTensor, mask: Option<GgmlTensor>, scale: f32) -> GgmlTensor {
+        let ctx = q.ctx.clone();
+        unsafe {
+            let mask_ptr = mask.map(|m| m.ptr).unwrap_or(std::ptr::null_mut());
+            let out = ggml_flash_attn_ext(ctx.ptr, q.ptr, k.ptr, v.ptr, mask_ptr, scale, 0.0, 0.0);
+            let gf = ggml_new_graph(ctx.ptr);
+            ggml_build_forward_expand(gf, out);
+            let executor = ctx.executor.clone();
+            let _guard = executor.lock.lock().unwrap();
+            executor.compute_graph(gf).expect("Compute failed");
             GgmlTensor::from_raw(out, ctx.clone())
         }
     }

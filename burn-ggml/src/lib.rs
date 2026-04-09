@@ -6,6 +6,7 @@ pub mod graph;
 pub mod ops;
 pub mod memory;
 pub mod gguf;
+pub mod model;
 
 pub use backend::*;
 pub use device::*;
@@ -14,6 +15,7 @@ pub use context::*;
 pub use ops::prefetch::*;
 pub use ops::offload::*;
 pub use ops::module_ops::GgmlOps;
+pub use ops::tokenizer::*;
 
 #[cfg(test)]
 mod tests {

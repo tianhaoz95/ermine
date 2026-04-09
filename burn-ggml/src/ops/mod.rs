@@ -6,9 +6,11 @@ pub mod activation_ops;
 pub mod quant_ops;
 pub mod prefetch;
 pub mod offload;
+pub mod tokenizer;
 
 pub use prefetch::*;
 pub use offload::*;
+pub use tokenizer::*;
 
 use burn::tensor::backend::Backend;
 

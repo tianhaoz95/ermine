@@ -67,7 +67,7 @@ if __name__ == "__main__":
     
     // 2. Load tensor from GGUF
     let ctx = std::sync::Arc::new(burn_ggml::GgmlContext::new(device.clone()));
-    let weight_primitive = unsafe { index.load_tensor("test.weight", ctx.clone()).expect("Failed to load tensor") };
+    let weight_primitive = unsafe { index.load_tensor("test.weight", &ctx).expect("Failed to load tensor") };
     let weight: Tensor<GgmlBackend, 2, Float> = Tensor::from_primitive(TensorPrimitive::Float(weight_primitive));
     
     // 3. Run some operations to verify synchronization and backend persistence

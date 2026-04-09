@@ -19,12 +19,12 @@ This document tracks the remaining work for **Phase 1 (Linux, wgpu/Vulkan)** as 
 
 
 ## P1-T2 — `WeightCache<T>` Implementation
-**Status:** 🟡 Skeleton Only (See `burn-ggml/src/memory/weight_cache.rs`)
-- [ ] **Disk I/O:** Replace simulated loading with real async SSD I/O.
-  - [ ] Use `memmap2` for GGUF mapping.
-  - [ ] Implement `tokio::fs` pread for cache misses.
-- [ ] **LRU Eviction:** Ensure the `LruCache` correctly handles capacity overflows and evicts the least recently used slots.
-- [ ] **Backend Integration:** Transition from `Vec<u8>` to backend-specific buffer handles.
+**Status:** ✅ Done
+- [x] **Disk I/O:** Replace simulated loading with real async SSD I/O.
+  - [x] Use `memmap2` for GGUF mapping.
+  - [x] Implement `tokio::task::spawn_blocking` for cache misses.
+- [x] **LRU Eviction:** Ensure the `LruCache` correctly handles capacity overflows and evicts the least recently used slots.
+- [x] **Backend Integration:** Transition from `Vec<u8>` to backend-specific tensor handles (`GgmlTensor`).
 
 ## P1-T3 — KV Cache SSD Offload (Ping-Pong)
 **Status:** 🔴 Not Started (See `burn-ggml/src/memory/kv_offload.rs`)
@@ -36,9 +36,9 @@ This document tracks the remaining work for **Phase 1 (Linux, wgpu/Vulkan)** as 
 - [ ] Implement async write-back batching (flush every 16-32 steps).
 
 ## P1-T4 — GGUF Model Loader Enhancements
-**Status:** 🟡 Partial (See `burn-ggml/src/gguf.rs`)
-- [ ] Implement `GgufIndex::expert_offsets(layer_idx)` to return byte ranges for MoE experts.
-- [ ] Implement `GgufIndex::layer_offsets()` to return byte ranges for dense layers.
+**Status:** ✅ Done
+- [x] Implement `GgufIndex::expert_offsets(layer_idx)` to return byte ranges for MoE experts.
+- [x] Implement `GgufIndex::layer_offsets()` to return byte ranges for dense layers.
 - [ ] Add support for parsing hybrid attention metadata (`sliding_window` vs `global`).
 
 ## P1-T5 — WGPU Backend Core Ops & Offload Device

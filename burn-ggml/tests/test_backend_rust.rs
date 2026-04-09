@@ -20,7 +20,7 @@ fn test_rust_backend_with_qwen_weights() {
     
     println!("Loading weight '{}' from model...", weight_name);
     let weight_primitive = unsafe { 
-        index.load_tensor(weight_name, ctx.clone()).expect("Failed to load tensor") 
+        index.load_tensor(weight_name, &ctx).expect("Failed to load tensor") 
     };
     
     println!("Weight loaded. Shape: {:?}, Type: {:?}", weight_primitive.shape(), weight_primitive.dtype());
