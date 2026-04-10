@@ -123,7 +123,7 @@ impl GgmlContext {
     pub fn new_work_context(&self) -> Arc<Self> {
         unsafe {
             let params = ggml_init_params {
-                mem_size: 100 * 1024 * 1024,
+                mem_size: 256 * 1024 * 1024,  // Increased from 100MB to 256MB for inference
                 mem_buffer: std::ptr::null_mut(),
                 no_alloc: true,
             };
@@ -161,7 +161,7 @@ impl GgmlContext {
 
         unsafe {
             let params = ggml_init_params {
-                mem_size: 100 * 1024 * 1024, // 100MB for metadata
+                mem_size: 256 * 1024 * 1024,  // Increased from 100MB to 256MB for inference
                 mem_buffer: std::ptr::null_mut(),
                 no_alloc: true,
             };
